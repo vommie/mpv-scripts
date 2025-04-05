@@ -1,4 +1,4 @@
-# My MPV Lua Scripts
+# MPV Scripts
 
 This repository contains a collection of individual Lua scripts designed to enhance the functionality of the [MPV media player](https://mpv.io/). All scripts are written by [vommie](https://github.com/vommie) and released into the **public domain**—feel free to use, modify, or distribute them as you wish! They are only tested on Linux.
 
