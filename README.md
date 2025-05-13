@@ -15,16 +15,16 @@ Ensure the `.lua` files are placed directly in the `scripts` folder. MPV will lo
 
 Below is a brief description of each script included in this collection:
 
-- **`ab-repeat.lua`**
+- **`ab_repeat.lua`**
  Enables frame-precise A-B looping. Set a start (A) and end (B) point to repeat a section of the video or audio. You can also save, load and delete multiple ab-repeats per video, an `ab-repeat.json` file inside of the mpv config directory is used as "database".
  *Default keybindings*: `HOME` (A), `END` (B), `DEL` (reset), `CTRL+S` (save an ab-repeat), `CTRL+L` (load an ab-repeat), `CTRL+DEL` (delete one or all ab-repeats).
 
 
-- **`zoom-at-mouse.lua`**
+- **`zoom_at_mouse.lua`**
  Zooms into the video centered on the mouse cursor using the mouse wheel while holding `Alt`. Experimental feature.
  *Default keybindings*: `Alt+WHEEL_UP` (zoom in), `Alt+WHEEL_DOWN` (zoom out), `Alt+r` (reset).
 
-- **`hold-to-fast-play.lua`**
+- **`mouse_fast_play.lua`**
  Increases playback speed when holding the left mouse button, similar to YouTube's fast-play feature.
  *Default keybinding*: `MBTN_LEFT` (hold to speed up, release to resume normal speed).
 
