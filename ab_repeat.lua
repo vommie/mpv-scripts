@@ -1,3 +1,4 @@
+
 -- This script enables a frame precise A-B repeat functionality in MPV. It allows you to set an A point (start) and a B point (end) in a video or audio file to loop playback between these two points. If only an A point is set, it loops from A to the end of the file. If only an B point is set, it auto loops from the start of the video. The script also provides a reset function to clear the points.
 --
 -- You can also save, load and delete your AB-Repeats. Multiple AB-Repeat-Ranges per video are allowed. See the Keybindings. When you save an AB-Repeat, you can input an name for it or just press Enter for an default enumerated name.
@@ -107,12 +108,29 @@ end
 local function write_json_file(data)
     local file = io.open(AB_RANGES_DB, "w")
     if not file then
-        msg.error("Failed to write to " .. AB_RANGES_DB)
+        msg.error("Failed to open file for writing: " .. AB_RANGES_DB)
         show_osd("Failed to save AB range", "error", nil, true)
         return false
     end
-    file:write(utils.format_json(data))
+
+    local json_data = utils.format_json(data)
+    if not json_data then
+        msg.error("Failed to serialize JSON data: " .. utils.to_string(data))
+        show_osd("Failed to serialize AB range data", "error", nil, true)
+        file:close()
+        return false
+    end
+
+    local success, write_err = pcall(function() file:write(json_data) end)
+    if not success then
+        msg.error("Failed to write JSON to file: " .. (write_err or "unknown error"))
+        show_osd("Failed to write AB range", "error", nil, true)
+        file:close()
+        return false
+    end
+
     file:close()
+    msg.info("Successfully wrote AB range to " .. AB_RANGES_DB)
     return true
 end
 
