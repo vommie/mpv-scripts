@@ -28,7 +28,11 @@ local CONFIG = {
     -- Timeout (in seconds) for the end-file handler seek to ensure reliability on slow systems or streams
     end_file_timeout = 0.01,
     -- Duration (in seconds) for displaying the load/delete menu
-    menu_display_duration = 10
+    menu_display_duration = 10,
+    -- Reset AB points when a new file is loaded (different from the current file)
+    reset_on_new_file = true,
+    -- Show OSD message indicating if stored AB ranges exist for a new file
+    show_stored_ranges_message = true
 }
 
 local CONFIG_ROOT = (os.getenv('APPDATA') or os.getenv('HOME')..'/.config')..'/mpv/'
@@ -44,25 +48,7 @@ local b_point = nil
 local initial_loop_file_value = mp.get_property("loop-file", "no")
 local video_duration = 0
 local video_fps = 30
-
-local function initialize_video_metadata()
-    video_duration = mp.get_property_number("duration") or 0
-    if video_duration == 0 then
-        msg.warn("Video duration is 0; possibly corrupt file or metadata missing")
-    end
-    video_fps = mp.get_property_number("container-fps")
-    if not video_fps then
-        local params = mp.get_property_native("video-params")
-        video_fps = params and params.fps
-    end
-    if not video_fps then
-        video_fps = mp.get_property_number("current-vf-fps") or
-                    mp.get_property_number("estimated-vf-fps") or
-                    30
-    end
-    msg.info("Initialized video duration: " .. video_duration)
-    msg.info("Initialized video FPS: " .. video_fps)
-end
+local last_video_key = nil
 
 local function jump_to_a_point()
     if a_point then mp.commandv("seek", a_point, "absolute", "exact") end
@@ -362,6 +348,9 @@ local function set_b_point()
 end
 
 local function reset_points()
+    if not a_point and not b_point then
+        return
+    end
     a_point = nil
     b_point = nil
     mp.set_property("loop-file", initial_loop_file_value)
@@ -390,7 +379,52 @@ local function on_end_file(event)
     end
 end
 
-mp.register_event("file-loaded", initialize_video_metadata)
+local function reset_points_on_new_file(current_video_key)
+    if CONFIG.reset_on_new_file and last_video_key and current_video_key ~= last_video_key then
+        reset_points()
+        msg.info("New file: Reset AB points")
+    end
+end
+
+local function show_stored_ranges_osd(video_key)
+    if not CONFIG.show_stored_ranges_message then
+        return
+    end
+    local data = read_json_file()
+    local ranges = data[video_key] or {}
+    local count = #ranges
+    if count > 0 then
+        show_osd(count .. " stored AB range(s) found for this video", "info", 3, true)
+    end
+end
+
+local function on_file_loaded()
+    video_duration = mp.get_property_number("duration") or 0
+    if video_duration == 0 then
+        msg.warn("Video duration is 0; possibly corrupt file or metadata missing")
+    end
+    video_fps = mp.get_property_number("container-fps")
+    if not video_fps then
+        local params = mp.get_property_native("video-params")
+        video_fps = params and params.fps
+    end
+    if not video_fps then
+        video_fps = mp.get_property_number("current-vf-fps") or
+                    mp.get_property_number("estimated-vf-fps") or
+                    30
+    end
+    msg.info("Initialized video duration: " .. video_duration)
+    msg.info("Initialized video FPS: " .. video_fps)
+
+    local current_video_key = get_video_key()
+    if current_video_key ~= last_video_key then
+        reset_points_on_new_file(current_video_key)
+        show_stored_ranges_osd(current_video_key)
+    end
+    last_video_key = current_video_key
+end
+
+mp.register_event("file-loaded", on_file_loaded)
 mp.add_key_binding("HOME", "set-a-point", set_a_point)
 mp.add_key_binding("END", "set-b-point", set_b_point)
 mp.add_key_binding("DEL", "reset-points", reset_points)
