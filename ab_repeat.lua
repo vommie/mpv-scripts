@@ -62,6 +62,10 @@ local function close_menu(by_selection)
         mp.remove_key_binding("delete_all_ranges")
     end
     mp.remove_key_binding("menu_esc")
+    for _, binding in ipairs(active_menu_data.blocked_keys) do
+        mp.remove_key_binding(binding.name)
+    end
+    active_menu_data.blocked_keys = {}
     if by_selection == nil then
         mp.osd_message("", 0.1)
     end
@@ -72,6 +76,9 @@ local function cleanup_input()
     if not menu_active or not active_save_data then return end
     active_save_data.input_active = false
     menu_active = false
+    if active_save_data.timeout then
+        active_save_data.timeout:stop()
+    end
     for _, binding in ipairs(active_save_data.key_bindings) do
         mp.remove_key_binding(binding.name)
     end
@@ -159,10 +166,23 @@ local function save_ab_range()
     local input_active = true
     local key_bindings = {}
     menu_active = true
-    active_save_data = { input_active = input_active, key_bindings = key_bindings }
+    active_save_data = { input_active = input_active, key_bindings = key_bindings, timeout = nil }
 
     local function update_osd()
         mp.osd_message("Enter range name (Enter to confirm, Esc to cancel):\n" .. input, 300)
+    end
+
+    local function reset_save_menu_timeout()
+        if active_save_data.timeout then
+            active_save_data.timeout:stop()
+        end
+        active_save_data.timeout = mp.add_timeout(CONFIG.menu_display_duration, function()
+            if active_save_data and active_save_data.input_active then
+                active_save_data.input_active = false
+                mp.osd_message("Save cancelled")
+                cleanup_input()
+            end
+        end)
     end
 
     local function handle_input(event)
@@ -188,9 +208,11 @@ local function save_ab_range()
         elseif key == "BS" then
             input = input:sub(1, -2)
             update_osd()
+            reset_save_menu_timeout()
         elseif text and text:match("[%w%-%_%.,%s]") then
             input = input .. text
             update_osd()
+            reset_save_menu_timeout()
         end
     end
 
@@ -215,14 +237,7 @@ local function save_ab_range()
     table.insert(key_bindings, { name = "input_bs" })
 
     update_osd()
-
-    mp.add_timeout(CONFIG.menu_display_duration, function()
-        if active_save_data and active_save_data.input_active then
-            active_save_data.input_active = false
-            mp.osd_message("Save cancelled")
-            cleanup_input()
-        end
-    end)
+    reset_save_menu_timeout()
 end
 
 local function show_menu(ranges, callback, action)
@@ -232,17 +247,28 @@ local function show_menu(ranges, callback, action)
     end
 
     menu_active = true
-    active_menu_data = { ranges = ranges, action = action }
+    active_menu_data = { ranges = ranges, action = action, blocked_keys = {} }
 
-    local menu_text = (action == "delete" and "Select range to delete (0: All, 1-9: Range):\n" or "Select range (1-9):\n")
+    local menu_text = (action == "delete" and "Select range to delete (0: All, 1-" .. #ranges .. ": Range):\n" or "Select range (1-" .. #ranges .. "):\n")
     for i, range in ipairs(ranges) do
         menu_text = menu_text .. i .. ": " .. range.name .. " (" .. range.a_point .. " -> " .. range.b_point .. ")\n"
     end
-    if #ranges > 9 then
-        menu_text = menu_text .. "Warning: Only ranges 1-9 can be selected with keys. Use 0 to delete all (delete menu only)."
-    end
 
     mp.osd_message(menu_text, CONFIG.menu_display_duration)
+
+    local reserved_keys = {
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "ESC"
+    }
+
+    local function block_key(key)
+        local binding_name = "block_" .. key:gsub("[^%w]", "_")
+        mp.add_forced_key_binding(key, binding_name, function() end)
+        table.insert(active_menu_data.blocked_keys, { name = binding_name })
+    end
+
+    for _, key in ipairs(reserved_keys) do
+        block_key(key)
+    end
 
     for i = 1, math.min(#ranges, 9) do
         mp.add_forced_key_binding(tostring(i), "select_range_" .. i, function()
@@ -250,12 +276,14 @@ local function show_menu(ranges, callback, action)
             close_menu(true)
         end)
     end
+
     if action == "delete" then
         mp.add_forced_key_binding("0", "delete_all_ranges", function()
             callback(0)
             close_menu(true)
         end)
     end
+
     mp.add_forced_key_binding("ESC", "menu_esc", function()
         close_menu()
     end)
