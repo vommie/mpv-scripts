@@ -1,4 +1,3 @@
-
 -- This script enables a frame precise A-B repeat functionality in MPV. It allows you to set an A point (start) and a B point (end) in a video or audio file to loop playback between these two points. If only an A point is set, it loops from A to the end of the file. If only an B point is set, it auto loops from the start of the video. The script also provides a reset function to clear the points.
 --
 -- You can also save, load and delete your AB-Repeats. Multiple AB-Repeat-Ranges per video are allowed. See the Keybindings. When you save an AB-Repeat, you can input an name for it or just press Enter for an default enumerated name.
@@ -19,7 +18,7 @@ local CONFIG = {
     auto_set_b_point = true,
     -- Enable end-file handler as fallback for looping when B point is near video end, useful for streams or files with metadata issues
     use_end_file_handler = true,
-    -- Show OSD messages for user actions like setting points or starting loops
+    -- Show OSD messages for user actions like setting points, starting loops or if stored repeats are found for a video. Critical msgs, menus or feedback is still shown.
     show_osd_messages = true,
     -- Tolerance (in seconds) for triggering loop before B point, applied only in the end region for automatic B points
     b_point_tolerance = 0.1,
@@ -49,36 +48,55 @@ local initial_loop_file_value = mp.get_property("loop-file", "no")
 local video_duration = 0
 local video_fps = 30
 local last_video_key = nil
+local menu_active = false
+local active_menu_data = nil
+local active_save_data = nil
+
+local function close_menu(by_selection)
+    if not menu_active or not active_menu_data then return end
+    menu_active = false
+    for j = 1, math.min(#active_menu_data.ranges, 9) do
+        mp.remove_key_binding("select_range_" .. j)
+    end
+    if active_menu_data.action == "delete" then
+        mp.remove_key_binding("delete_all_ranges")
+    end
+    mp.remove_key_binding("menu_esc")
+    if by_selection == nil then
+        mp.osd_message("", 0.1)
+    end
+    active_menu_data = nil
+end
+
+local function cleanup_input()
+    if not menu_active or not active_save_data then return end
+    active_save_data.input_active = false
+    menu_active = false
+    for _, binding in ipairs(active_save_data.key_bindings) do
+        mp.remove_key_binding(binding.name)
+    end
+    active_save_data.key_bindings = {}
+    active_save_data = nil
+end
+
+local function close_active_menu()
+    if menu_active then
+        if active_menu_data then
+            close_menu()
+        elseif active_save_data then
+            cleanup_input()
+            mp.osd_message("Save cancelled")
+        end
+    end
+end
 
 local function jump_to_a_point()
     if a_point then mp.commandv("seek", a_point, "absolute", "exact") end
 end
 
-local function show_osd(message, verbose, duration, always_show)
-    if always_show or CONFIG.show_osd_messages then
-        if duration then mp.osd_message(message, duration) else mp.osd_message(message) end
-    end
-    if verbose and msg[verbose] then
-        msg[verbose](message)
-    end
-end
-
-local function validate_points(new_point, is_a_point)
-    if is_a_point and b_point and new_point > b_point then
-        msg.error("Invalid A point: " .. new_point .. " after B: " .. b_point)
-        show_osd("Error: A point after B point", "error")
-        return false
-    elseif not is_a_point and a_point and new_point < a_point then
-        msg.error("Invalid B point: " .. new_point .. " before A: " .. a_point)
-        show_osd("Error: B point before A point", "error")
-        return false
-    end
-    return true
-end
-
 local function start_loop()
     mp.set_property("loop-file", "no")
-    show_osd("Starting AB loop: " .. a_point .. " -> " .. b_point, "info")
+    if CONFIG.show_osd_messages then mp.osd_message("Starting AB loop: " .. a_point .. " -> " .. b_point) end
     jump_to_a_point()
 end
 
@@ -95,14 +113,14 @@ local function write_json_file(data)
     local file = io.open(AB_RANGES_DB, "w")
     if not file then
         msg.error("Failed to open file for writing: " .. AB_RANGES_DB)
-        show_osd("Failed to save AB range", "error", nil, true)
+        mp.osd_message("Failed to save AB range")
         return false
     end
 
     local json_data = utils.format_json(data)
     if not json_data then
         msg.error("Failed to serialize JSON data: " .. utils.to_string(data))
-        show_osd("Failed to serialize AB range data", "error", nil, true)
+        mp.osd_message("Failed to serialize AB range data")
         file:close()
         return false
     end
@@ -110,7 +128,7 @@ local function write_json_file(data)
     local success, write_err = pcall(function() file:write(json_data) end)
     if not success then
         msg.error("Failed to write JSON to file: " .. (write_err or "unknown error"))
-        show_osd("Failed to write AB range", "error", nil, true)
+        mp.osd_message("Failed to write AB range")
         file:close()
         return false
     end
@@ -125,8 +143,9 @@ local function get_video_key()
 end
 
 local function save_ab_range()
+    if menu_active then return end
     if not a_point or not b_point then
-        show_osd("No valid AB range to save", "error", nil, true)
+        mp.osd_message("No valid AB range to save")
         return
     end
 
@@ -139,39 +158,32 @@ local function save_ab_range()
     local input = ""
     local input_active = true
     local key_bindings = {}
+    menu_active = true
+    active_save_data = { input_active = input_active, key_bindings = key_bindings }
 
     local function update_osd()
-        local prompt = "Enter range name (Enter to confirm, Esc to cancel):\n" .. input
-        show_osd(prompt, nil, CONFIG.menu_display_duration, true)
-    end
-
-    local function cleanup_input()
-        input_active = false
-        for _, binding in ipairs(key_bindings) do
-            mp.remove_key_binding(binding.name)
-        end
-        key_bindings = {}
+        mp.osd_message("Enter range name (Enter to confirm, Esc to cancel):\n" .. input, 300)
     end
 
     local function handle_input(event)
-        if not input_active then return end
+        if not active_save_data or not active_save_data.input_active then return end
         if event.event ~= "down" then return end
 
         local key = event.key_name
         local text = event.key_text or event.text
 
         if key == "ENTER" then
-            input_active = false
+            active_save_data.input_active = false
             local range_name = input:match("^%s*(.-)%s*$") or ""
             range_name = range_name ~= "" and range_name or default_name
             table.insert(data[video_key], { a_point = a_point, b_point = b_point, name = range_name })
             if write_json_file(data) then
-                show_osd("Saved AB range: " .. range_name, "info", nil, true)
+                mp.osd_message("Saved AB range: " .. range_name)
             end
             cleanup_input()
         elseif key == "ESC" then
-            input_active = false
-            show_osd("Save cancelled", "info", nil, true)
+            active_save_data.input_active = false
+            mp.osd_message("Save cancelled")
             cleanup_input()
         elseif key == "BS" then
             input = input:sub(1, -2)
@@ -205,9 +217,9 @@ local function save_ab_range()
     update_osd()
 
     mp.add_timeout(CONFIG.menu_display_duration, function()
-        if input_active then
-            input_active = false
-            show_osd("Save cancelled", "info", nil, true)
+        if active_save_data and active_save_data.input_active then
+            active_save_data.input_active = false
+            mp.osd_message("Save cancelled")
             cleanup_input()
         end
     end)
@@ -215,9 +227,12 @@ end
 
 local function show_menu(ranges, callback, action)
     if not ranges or #ranges == 0 then
-        show_osd("No saved AB ranges", "info", nil, true)
+        mp.osd_message("No saved AB ranges")
         return
     end
+
+    menu_active = true
+    active_menu_data = { ranges = ranges, action = action }
 
     local menu_text = (action == "delete" and "Select range to delete (0: All, 1-9: Range):\n" or "Select range (1-9):\n")
     for i, range in ipairs(ranges) do
@@ -227,38 +242,31 @@ local function show_menu(ranges, callback, action)
         menu_text = menu_text .. "Warning: Only ranges 1-9 can be selected with keys. Use 0 to delete all (delete menu only)."
     end
 
-    show_osd(menu_text, nil, CONFIG.menu_display_duration, true)
+    mp.osd_message(menu_text, CONFIG.menu_display_duration)
+
     for i = 1, math.min(#ranges, 9) do
         mp.add_forced_key_binding(tostring(i), "select_range_" .. i, function()
             callback(i)
-            for j = 1, math.min(#ranges, 9) do
-                mp.remove_key_binding("select_range_" .. j)
-            end
-            if action == "delete" then
-                mp.remove_key_binding("delete_all_ranges")
-            end
+            close_menu(true)
         end)
     end
     if action == "delete" then
         mp.add_forced_key_binding("0", "delete_all_ranges", function()
             callback(0)
-            for j = 1, math.min(#ranges, 9) do
-                mp.remove_key_binding("select_range_" .. j)
-            end
-            mp.remove_key_binding("delete_all_ranges")
+            close_menu(true)
         end)
     end
+    mp.add_forced_key_binding("ESC", "menu_esc", function()
+        close_menu()
+    end)
+
     mp.add_timeout(CONFIG.menu_display_duration, function()
-        for j = 1, math.min(#ranges, 9) do
-            mp.remove_key_binding("select_range_" .. j)
-        end
-        if action == "delete" then
-            mp.remove_key_binding("delete_all_ranges")
-        end
+        close_menu()
     end)
 end
 
 local function load_ab_range_menu()
+    if menu_active then return end
     local data = read_json_file()
     local video_key = get_video_key()
     local ranges = data[video_key] or {}
@@ -267,12 +275,13 @@ local function load_ab_range_menu()
         local range = ranges[index]
         a_point = range.a_point
         b_point = range.b_point
-        show_osd("Loaded AB range: " .. range.name, "info", nil, true)
+        if CONFIG.show_osd_messages then mp.osd_message("Loaded AB range: " .. range.name) end
         start_loop()
     end, "load")
 end
 
 local function delete_ab_range_menu()
+    if menu_active then return end
     local data = read_json_file()
     local video_key = get_video_key()
     local ranges = data[video_key] or {}
@@ -281,7 +290,7 @@ local function delete_ab_range_menu()
         if index == 0 then
             data[video_key] = nil
             write_json_file(data)
-            show_osd("Deleted all AB ranges", "info", nil, true)
+            mp.osd_message("Deleted all AB ranges")
         else
             table.remove(ranges, index)
             if #ranges == 0 then
@@ -290,71 +299,63 @@ local function delete_ab_range_menu()
                 data[video_key] = ranges
             end
             write_json_file(data)
-            show_osd("Deleted AB range", "info", nil, true)
+            mp.osd_message("Deleted AB range")
         end
     end, "delete")
 end
 
 local function set_a_point()
+    if menu_active then return end
     local pos = mp.get_property_number("time-pos")
     if not pos then
         msg.error("Failed to set A point: no time-pos")
-        show_osd("Failed to set A point", "error")
+        mp.osd_message("Failed to set A point")
         return
     end
 
     a_point = pos
-    show_osd("A point set at " .. a_point, "info")
+    mp.osd_message("A point set at " .. a_point)
 
     if CONFIG.auto_set_b_point and not b_point then
         if video_duration > 0 and video_fps > 0 then
             b_point = video_duration - (1 / video_fps)
-            show_osd("B point set at " .. b_point, "info")
-            start_loop()
+            if CONFIG.show_osd_messages then mp.osd_message("B point set at " .. b_point) end
         else
             msg.error("Failed to set B point: duration=" .. video_duration .. ", fps=" .. video_fps)
-            show_osd("Failed to set automatic B point", "error")
+            mp.osd_message("Failed to set automatic B point")
             a_point = nil
             return
         end
-    elseif b_point and validate_points(a_point, true) then
-        start_loop()
-    else
-        a_point = nil
     end
 end
 
 local function set_b_point()
+    if menu_active then return end
     local pos = mp.get_property_number("time-pos")
     if not pos then
         msg.error("Failed to set B point: no time-pos")
-        show_osd("Failed to set B point", "error")
+        mp.osd_message("Failed to set B point")
         return
     end
 
     b_point = pos
-    show_osd("B point set at " .. b_point, "info")
+    if CONFIG.show_osd_messages then mp.osd_message("B point set at " .. b_point) end
 
     if CONFIG.auto_set_a_point and not a_point then
         a_point = 0
-        show_osd("A point set at " .. a_point, "info")
-    end
-
-    if a_point and validate_points(b_point, false) then
-        start_loop()
-    else
-        b_point = nil
+        if CONFIG.show_osd_messages then mp.osd_message("A point set at " .. a_point) end
     end
 end
 
 local function reset_points()
+    if menu_active then return end
     if not a_point and not b_point then
         return
     end
     a_point = nil
     b_point = nil
     mp.set_property("loop-file", initial_loop_file_value)
-    show_osd("AB points cleared", "info")
+    if CONFIG.show_osd_messages then mp.osd_message("AB points cleared") end
 end
 
 local function monitor_loop()
@@ -394,7 +395,7 @@ local function show_stored_ranges_osd(video_key)
     local ranges = data[video_key] or {}
     local count = #ranges
     if count > 0 then
-        show_osd(count .. " stored AB range(s) found for this video", "info", 3, true)
+        if CONFIG.show_osd_messages then mp.osd_message(count .. " stored AB range(s) found for this video") end
     end
 end
 
@@ -418,6 +419,7 @@ local function on_file_loaded()
 
     local current_video_key = get_video_key()
     if current_video_key ~= last_video_key then
+        close_active_menu()
         reset_points_on_new_file(current_video_key)
         show_stored_ranges_osd(current_video_key)
     end
