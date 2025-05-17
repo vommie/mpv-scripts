@@ -1,6 +1,6 @@
 # MPV Scripts
 
-This repository contains a collection of individual Lua scripts designed to enhance the functionality of the [MPV media player](https://mpv.io/). All scripts are written by [vommie](https://github.com/vommie) and released into the **public domain**—feel free to use, modify, or distribute them as you wish! They are only tested on Linux.
+This repository contains a collection of individual Lua scripts designed to enhance the functionality of the [MPV media player](https://mpv.io/). They are only tested on Linux.
 
 ## Installation
 
@@ -13,12 +13,9 @@ Ensure the `.lua` files are placed directly in the `scripts` folder. MPV will lo
 
 ## Scripts
 
-Below is a brief description of each script included in this collection:
-
 - **`ab_repeat.lua`**
- Enables frame-precise A-B looping. Set a start (A) and end (B) point to repeat a section of the video or audio. You can also save, load and delete multiple ab-repeats per video, an `ab-repeat.json` file inside of the mpv config directory is used as "database".
+ Adds frame-precise A-B looping and save/load for A-B repeats. Set a start (A) and end (B) point to repeat a section of the video or audio. You can also save, load and delete multiple ab-repeats per video, an `ab-repeat.json` file inside of the mpv config directory is used as "database".
  *Default keybindings*: `HOME` (A), `END` (B), `DEL` (reset), `CTRL+S` (save an ab-repeat), `CTRL+L` (load an ab-repeat), `CTRL+DEL` (delete one or all ab-repeats).
-
 
 - **`zoom_at_mouse.lua`**
  Zooms into the video centered on the mouse cursor using the mouse wheel while holding `Alt`. Experimental feature.
@@ -30,8 +27,9 @@ Below is a brief description of each script included in this collection:
 
 ## Customization
 
-Each script includes comments in the source code explaining how to modify keybindings or settings (e.g., zoom step, fast-play speed). Refer to the [MPV documentation](https://mpv.io/manual/stable/) for valid key names and further details.
+Each script includes comments in the source code explaining how to modify keybindings or settings.
+Refer to the [MPV documentation](https://mpv.io/manual/stable/) for valid key names and further details.
 
 ## License
 
-All scripts are **public domain**. No restrictions apply—do whatever you want with them!
+All scripts in this repository are public domain. No restrictions apply—do whatever you want with them!
