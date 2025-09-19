@@ -31,7 +31,9 @@ local CONFIG = {
     -- Reset AB points when a new file is loaded (different from the current file)
     reset_on_new_file = true,
     -- Show OSD message indicating if stored AB ranges exist for a new file
-    show_stored_ranges_message = true
+    show_stored_ranges_message = true,
+    -- Number of entries to show per page in the load/delete menu
+    entries_per_page = 10
 }
 
 local CONFIG_ROOT = (os.getenv('APPDATA') or os.getenv('HOME')..'/.config')..'/mpv/'
@@ -51,25 +53,106 @@ local last_video_key = nil
 local menu_active = false
 local active_menu_data = nil
 local active_save_data = nil
+local menu_close_timer = nil
+
+local function format_time(t)
+    if type(t) ~= "number" then return t end
+    return string.format("%.3f", t)
+end
+
+local function get_key_for_index(i)
+    if i >= 1 and i <= 9 then
+        return tostring(i)
+    elseif i >= 10 and i <= 35 then
+        return string.char(string.byte('a') + (i - 10))
+    else
+        return nil
+    end
+end
 
 local function close_menu(by_selection)
     if not menu_active or not active_menu_data then return end
+    if menu_close_timer then
+        menu_close_timer:kill()
+        menu_close_timer = nil
+    end
+
     menu_active = false
-    for j = 1, math.min(#active_menu_data.ranges, 9) do
-        mp.remove_key_binding("select_range_" .. j)
+    for _, binding in ipairs(active_menu_data.item_bindings) do
+        mp.remove_key_binding(binding.name)
     end
     if active_menu_data.action == "delete" then
         mp.remove_key_binding("delete_all_ranges")
     end
     mp.remove_key_binding("menu_esc")
+    mp.remove_key_binding("menu_pgup")
+    mp.remove_key_binding("menu_pgdwn")
+
     for _, binding in ipairs(active_menu_data.blocked_keys) do
         mp.remove_key_binding(binding.name)
     end
     active_menu_data.blocked_keys = {}
+
     if by_selection == nil then
         mp.osd_message("", 0.1)
     end
     active_menu_data = nil
+end
+
+local function reset_menu_timeout()
+    if menu_close_timer then
+        menu_close_timer:kill()
+        menu_close_timer = nil
+    end
+    menu_close_timer = mp.add_timeout(CONFIG.menu_display_duration, function()
+        if menu_active and active_menu_data then
+            close_menu()
+        end
+    end)
+end
+
+local function redraw_menu()
+    if not menu_active or not active_menu_data then return end
+
+    reset_menu_timeout()
+
+    for _, binding in ipairs(active_menu_data.item_bindings) do
+        mp.remove_key_binding(binding.name)
+    end
+    active_menu_data.item_bindings = {}
+
+    local ranges = active_menu_data.ranges
+    local page = active_menu_data.page
+    local total_pages = active_menu_data.total_pages
+    local start_index = (page - 1) * CONFIG.entries_per_page + 1
+    local end_index = math.min(start_index + CONFIG.entries_per_page - 1, #ranges)
+
+    local menu_text = active_menu_data.header
+    if page > 1 then
+        menu_text = menu_text .. "(Page " .. page - 1 .. " with Page-Up)\n"
+    end
+
+    for i = start_index, end_index do
+        local page_index = i - start_index + 1
+        local key_label = get_key_for_index(page_index)
+        if key_label then
+            local range = ranges[i]
+            menu_text = menu_text .. key_label .. ": " .. range.name .. " (" .. format_time(range.a_point) .. " -> " .. format_time(range.b_point) .. ")\n"
+
+            local binding_name = "select_range_" .. key_label
+            mp.add_forced_key_binding(key_label, binding_name, function()
+                active_menu_data.callback(i)
+                close_menu(true)
+            end)
+            table.insert(active_menu_data.item_bindings, { name = binding_name })
+        end
+    end
+
+    if page < total_pages then
+        menu_text = menu_text .. "(Page " .. page + 1 .. " with Page-Down)\n"
+    end
+
+    mp.osd_message(menu_text, CONFIG.menu_display_duration)
 end
 
 local function cleanup_input()
@@ -103,7 +186,7 @@ end
 
 local function start_loop()
     mp.set_property("loop-file", "no")
-    if CONFIG.show_osd_messages then mp.osd_message("Starting AB loop: " .. a_point .. " -> " .. b_point) end
+    if CONFIG.show_osd_messages then mp.osd_message("Starting AB loop: " .. format_time(a_point) .. " -> " .. format_time(b_point)) end
     jump_to_a_point()
 end
 
@@ -206,25 +289,37 @@ local function save_ab_range()
             mp.osd_message("Save cancelled")
             cleanup_input()
         elseif key == "BS" then
-            input = input:sub(1, -2)
+            local byte_pos = #input
+            while byte_pos > 0 do
+                local byte = string.byte(input, byte_pos)
+                if byte < 128 or byte >= 192 then
+                    break
+                end
+                byte_pos = byte_pos - 1
+            end
+            input = input:sub(1, byte_pos - 1)
             update_osd()
             reset_save_menu_timeout()
-        elseif text and text:match("[%w%-%_%.,%s]") then
+        elseif text and text ~= "" then
             input = input .. text
             update_osd()
             reset_save_menu_timeout()
         end
     end
 
-    local chars = {
-        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-        "SPACE", "-", "_", ".", ","
+    local chars = {}
+    for i = string.byte('a'), string.byte('z') do table.insert(chars, string.char(i)) end
+    for i = string.byte('A'), string.byte('Z') do table.insert(chars, string.char(i)) end
+    for i = string.byte('0'), string.byte('9') do table.insert(chars, string.char(i)) end
+
+    local symbols = {
+        "SPACE", "`", "~", "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "-", "_", "=", "+",
+        "[", "{", "]", "}", "\\", "|", ";", ":", "'", "\"", ",", "<", ".", ">", "/", "?"
     }
+    for _, s in ipairs(symbols) do table.insert(chars, s) end
 
     for _, char in ipairs(chars) do
-        local binding_name = "input_" .. char:gsub("[^%w]", "_")
+        local binding_name = "input_char_" .. char:gsub("[^%w]", function(c) return string.format("_%02x", string.byte(c)) end)
         mp.add_forced_key_binding(char, binding_name, handle_input, { complex = true, repeatable = true })
         table.insert(key_bindings, { name = binding_name })
     end
@@ -247,22 +342,30 @@ local function show_menu(ranges, callback, action)
     end
 
     menu_active = true
-    active_menu_data = { ranges = ranges, action = action, blocked_keys = {} }
+    active_menu_data = {
+        ranges = ranges,
+        action = action,
+        callback = callback,
+        page = 1,
+        total_pages = math.ceil(#ranges / CONFIG.entries_per_page),
+        blocked_keys = {},
+        item_bindings = {}
+    }
 
-    local menu_text = (action == "delete" and "Select range to delete (0: All, 1-" .. #ranges .. ": Range):\n" or "Select range (1-" .. #ranges .. "):\n")
-    for i, range in ipairs(ranges) do
-        menu_text = menu_text .. i .. ": " .. range.name .. " (" .. range.a_point .. " -> " .. range.b_point .. ")\n"
+    if action == "delete" then
+        active_menu_data.header = "Select range to delete (0: All, 1-9, a-z):\n"
+    else
+        active_menu_data.header = "Select range (1-9, a-z):\n"
     end
 
-    mp.osd_message(menu_text, CONFIG.menu_display_duration)
-
-    local reserved_keys = {
-        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "ESC"
-    }
+    local reserved_keys = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "ESC", "PGUP", "PGDWN" }
+    for i = string.byte('a'), string.byte('z') do
+        table.insert(reserved_keys, string.char(i))
+    end
 
     local function block_key(key)
         local binding_name = "block_" .. key:gsub("[^%w]", "_")
-        mp.add_forced_key_binding(key, binding_name, function() end)
+        mp.add_forced_key_binding(key, binding_name, function() reset_menu_timeout() end)
         table.insert(active_menu_data.blocked_keys, { name = binding_name })
     end
 
@@ -270,12 +373,23 @@ local function show_menu(ranges, callback, action)
         block_key(key)
     end
 
-    for i = 1, math.min(#ranges, 9) do
-        mp.add_forced_key_binding(tostring(i), "select_range_" .. i, function()
-            callback(i)
-            close_menu(true)
-        end)
-    end
+    mp.add_forced_key_binding("PGUP", "menu_pgup", function()
+        if active_menu_data.page > 1 then
+            active_menu_data.page = active_menu_data.page - 1
+            redraw_menu()
+        else
+            reset_menu_timeout()
+        end
+    end)
+
+    mp.add_forced_key_binding("PGDWN", "menu_pgdwn", function()
+        if active_menu_data.page < active_menu_data.total_pages then
+            active_menu_data.page = active_menu_data.page + 1
+            redraw_menu()
+        else
+            reset_menu_timeout()
+        end
+    end)
 
     if action == "delete" then
         mp.add_forced_key_binding("0", "delete_all_ranges", function()
@@ -288,9 +402,7 @@ local function show_menu(ranges, callback, action)
         close_menu()
     end)
 
-    mp.add_timeout(CONFIG.menu_display_duration, function()
-        close_menu()
-    end)
+    redraw_menu()
 end
 
 local function load_ab_range_menu()
@@ -342,12 +454,12 @@ local function set_a_point()
     end
 
     a_point = pos
-    mp.osd_message("A point set at " .. a_point)
+    mp.osd_message("A point set at " .. format_time(a_point))
 
     if CONFIG.auto_set_b_point and not b_point then
         if video_duration > 0 and video_fps > 0 then
             b_point = video_duration - (1 / video_fps)
-            if CONFIG.show_osd_messages then mp.osd_message("B point set at " .. b_point) end
+            if CONFIG.show_osd_messages then mp.osd_message("B point set at " .. format_time(b_point)) end
         else
             msg.error("Failed to set B point: duration=" .. video_duration .. ", fps=" .. video_fps)
             mp.osd_message("Failed to set automatic B point")
@@ -367,11 +479,11 @@ local function set_b_point()
     end
 
     b_point = pos
-    if CONFIG.show_osd_messages then mp.osd_message("B point set at " .. b_point) end
+    if CONFIG.show_osd_messages then mp.osd_message("B point set at " .. format_time(b_point)) end
 
     if CONFIG.auto_set_a_point and not a_point then
         a_point = 0
-        if CONFIG.show_osd_messages then mp.osd_message("A point set at " .. a_point) end
+        if CONFIG.show_osd_messages then mp.osd_message("A point set at " .. format_time(a_point)) end
     end
 end
 
