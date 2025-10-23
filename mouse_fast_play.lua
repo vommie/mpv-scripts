@@ -1,4 +1,4 @@
--- This script enables a "hold to fast-play" feature in MPV (similar to YouTube). When the left mouse button (MBTN_LEFT) is held down for a specified duration, the playback speed increases to a user-defined fast speed. Releasing the button returns the speed to normal (1.0).
+-- This script enables a "hold to fast-play" feature in MPV (similar to YouTube). When the left mouse button (MBTN_LEFT) is held down for a specified duration, the playback speed increases to a user-defined fast speed. Releasing the button returns the speed to the previous speed.
 --
 -- Keybinding: "MBTN_LEFT" (left mouse button) triggers the fast-play feature. Change the last line to another key or mouse button (e.g., "f", "SPACE", "MBTN_RIGHT") if desired.
 --
@@ -8,13 +8,14 @@
 
 local mp = require("mp")
 
-local decay_delay = 0.05  -- Delay before OSD updates (in seconds), typically no need to change
-local osd_duration = math.max(decay_delay, mp.get_property_number("osd-duration") / 1000)  -- Matches MPV's OSD duration
-local fast_speed = 2.0    -- Speed multiplier when holding the button (e.g., 2.0 = 2x speed). Adjust this to change how fast playback becomes.
-local hold_threshold = 0.25  -- Time in seconds to hold the button before fast playback starts. Increase for a longer delay, decrease for quicker response.
+-- User Variables
+local fast_speed = 2.0 -- Speed multiplier when holding the button (e.g., 2.0 = 2x speed). Adjust this to change how fast playback becomes.
+local hold_threshold = 0.25 -- Time in seconds to hold the button before fast playback starts. Increase for a longer delay, decrease for quicker response.
 
+-- Internal variables
 local timer = nil
 local is_held = false
+local previous_speed = 1.0
 
 local function set_fast_speed()
     if is_held then
@@ -27,6 +28,7 @@ local function fast_play(table)
 
     if table["event"] == "down" then
         is_held = true
+        previous_speed = mp.get_property_number("speed")
         if timer then
             timer:kill()
         end
@@ -36,8 +38,9 @@ local function fast_play(table)
         is_held = false
         if timer then
             timer:kill()
+            timer = nil
         end
-        mp.set_property("speed", 1.0)
+        mp.set_property("speed", previous_speed)
     end
 end
 

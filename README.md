@@ -32,4 +32,4 @@ Refer to the [MPV documentation](https://mpv.io/manual/stable/) for valid key na
 
 ## License
 
-All scripts in this repository are public domain. No restrictions apply—do whatever you want with them!
+All scripts in this repository are public domain. No restrictions apply - do whatever you want with them!
